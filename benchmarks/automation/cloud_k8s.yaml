@@ -2,12 +2,12 @@ resources:
   cloud: lambda
   accelerators: A10:1
 #  Uncomment the following line to expose ports on a different cloud
-#  ports: 6443
+  ports: 6443
 
 num_nodes: 1
 
 envs:
-  SKY_K3S_TOKEN: gyzSvfoh0yxQFmad1Nyi1g==
+  SKY_K3S_TOKEN: kSr1251b6QrKfQ0nxbEJ8w==
 
 run: |
   wait_for_gpu_operator_installation() {
@@ -89,6 +89,16 @@ run: |
     --set 'toolkit.env[2].value=nvidia'
 
   wait_for_gpu_operator_installation
+ 
+  # Install kube-prometheus-stack
+  echo "Installing kube-prometheus-stack"
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  helm repo update
+  helm install kube-prometheus-stack \
+  --create-namespace \
+  --namespace kube-prometheus-stack \
+  prometheus-community/kube-prometheus-stack
+
 
   # Create RuntimeClass
   sleep 5
@@ -100,3 +110,4 @@ run: |
     name: nvidia
   handler: nvidia
   EOF
+

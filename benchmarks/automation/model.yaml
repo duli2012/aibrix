@@ -8,6 +8,11 @@ metadata:
   namespace: default
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0        # don’t create a new pod until the old one is Terminated
+      maxUnavailable: 1 # allow the old pod to go down before bringing up the new one
   selector:
     matchLabels:
       model.aibrix.ai/name: deepseek-r1-distill-llama-8b
@@ -73,6 +78,20 @@ spec:
             periodSeconds: 5
             successThreshold: 1
             timeoutSeconds: 1
+        - name: aibrix-runtime
+          image: aibrix/runtime:v0.2.1
+          command:
+            - aibrix_runtime
+            - --port
+            - "8080"
+          env:
+            - name: INFERENCE_ENGINE
+              value: vllm
+            - name: INFERENCE_ENGINE_ENDPOINT
+              value: http://localhost:8000
+          ports:
+            - containerPort: 8080
+              protocol: TCP
 
 ---
 
@@ -100,3 +119,23 @@ spec:
   selector:
     model.aibrix.ai/name: deepseek-r1-distill-llama-8b
   type: ClusterIP
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: deepseek-r1-distill-llama-8b
+  namespace: default
+  labels:
+    release: kube-prometheus-stack   # or whatever your Prometheus CR expects
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      prometheus-discovery: "true"
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

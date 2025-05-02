@@ -67,7 +67,7 @@ chmod 700 ~/.lambda_cloud
 
 # Create lambda_keys file with hardcoded API key
 echo "Creating Lambda Cloud credentials file..."
-echo "api_key = <replace with your lambda cloud API key>" > ~/.lambda_cloud/lambda_keys
+echo "api_key = secret_benchmarking_4571b82ae76942dabceb2743a726de7c.JBGCbGOJHJ3ArAHRDklpTgrIN2EdOneY" > ~/.lambda_cloud/lambda_keys
 
 # Generate a strong passphrase for K3S token
 echo "Generating K3S token..."

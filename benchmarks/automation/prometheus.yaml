@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: deepseek-r1-svc-discover
+  namespace: default
+  labels:
+    release: kube-prometheus-stack
+    prometheus-discovery: "true"
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      prometheus-discovery: "true" 
+  endpoints:
+    - port: http
+      interval: 15s
+

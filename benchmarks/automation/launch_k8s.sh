@@ -9,9 +9,10 @@ source .venv/bin/activate
 
 # Read cluster name from environment variable if it exists, else use default value
 CLUSTER_NAME=${CLUSTER_NAME:-k8s}
-
+sky api stop 
+sky api start
 # Deploy the k8s cluster
-sky launch -y -c ${CLUSTER_NAME} cloud_k8s.yaml
+sky launch -y -c ${CLUSTER_NAME} cloud_k8s.yaml --retry-until-up
 
 # Get the endpoint of the k8s cluster
 # Attempt to get the primary endpoint and handle any errors

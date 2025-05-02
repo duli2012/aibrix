@@ -21,6 +21,9 @@ kubectl apply -k "github.com/vllm-project/aibrix/config/dependency?ref=v0.2.1" -
 echo "Installing AIBrix components..."
 kubectl apply -k "github.com/vllm-project/aibrix/config/overlays/release?ref=v0.2.1" --server-side --force-conflicts
 
+# Install Prometheus ServiceMonitors crd
+kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd-full/monitoring.coreos.com_servicemonitors.yaml
+
 # Wait for AIBrix pods to be ready
 echo "Waiting for AIBrix pods to be ready..."
 sleep 10  # Give pods time to start
