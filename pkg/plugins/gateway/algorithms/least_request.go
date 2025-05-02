@@ -17,7 +17,6 @@ limitations under the License.
 package routingalgorithms
 
 import (
-	"fmt"
 	"math"
 	"math/rand"
 
@@ -26,7 +25,6 @@ import (
 	"github.com/vllm-project/aibrix/pkg/types"
 	"github.com/vllm-project/aibrix/pkg/utils"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/klog/v2"
 )
 
 var (
@@ -52,58 +50,18 @@ func NewLeastRequestRouter() (types.Router, error) {
 	}, nil
 }
 
-func (r leastRequestRouter) Route(ctx *types.RoutingContext, pods types.PodList) (string, error) {
-	var targetPod *v1.Pod
-	minCount := math.MaxFloat64
-
-	if pods.Len() == 0 {
-		return "", fmt.Errorf("no pods to forward request")
-	}
-
-	readyPods := utils.FilterRoutablePods(pods.All())
-	if len(readyPods) == 0 {
-		return "", fmt.Errorf("no ready pods available for fallback")
-	}
-
-	for _, pod := range readyPods {
-		runningReq, err := r.cache.GetMetricValueByPodModel(pod.Name, ctx.Model, metrics.NumRequestsRunning)
-		if err != nil {
-			klog.Error(err)
-			continue
-		}
-		waitingReq, err := r.cache.GetMetricValueByPodModel(pod.Name, ctx.Model, metrics.NumRequestsWaiting)
-		if err != nil {
-			klog.Error(err)
-			continue
-		}
-		swappedReq, err := r.cache.GetMetricValueByPodModel(pod.Name, ctx.Model, metrics.NumRequestsSwapped)
-		if err != nil {
-			klog.Error(err)
-			continue
-		}
-
-		totalReq := runningReq.GetSimpleValue() + waitingReq.GetSimpleValue() + swappedReq.GetSimpleValue()
-		klog.V(4).Infof("pod: %v, podIP: %v, runningReq: %v, waitingReq: %v, swappedReq: %v, totalReq: %v",
-			pod.Name, pod.Status.PodIP, runningReq, waitingReq, swappedReq, totalReq)
-
-		if totalReq <= minCount {
-			minCount = totalReq
-			targetPod = pod
-		}
-	}
+// Route request based of least active request among input ready pods
+func (r leastRequestRouter) Route(ctx *types.RoutingContext, readyPodList types.PodList) (string, error) {
+	readyPods := readyPodList.All()
+	targetPod := selectTargetPodWithLeastRequestCount(r.cache, readyPods)
 
 	// Use fallback if no valid metrics
 	if targetPod == nil {
-		klog.Warning("No pods with valid metrics found; selecting a pod randomly as fallback")
 		var err error
-		targetPod, err = selectRandomPod(pods.All(), rand.Intn)
+		targetPod, err = SelectRandomPodAsFallback(ctx, readyPods, rand.Intn)
 		if err != nil {
 			return "", err
 		}
-	}
-
-	if targetPod == nil {
-		return "", fmt.Errorf("no pods to forward request")
 	}
 
 	ctx.SetTargetPod(targetPod)
@@ -112,8 +70,46 @@ func (r leastRequestRouter) Route(ctx *types.RoutingContext, pods types.PodList)
 
 func (r *leastRequestRouter) SubscribedMetrics() []string {
 	return []string{
-		metrics.NumRequestsRunning,
-		metrics.NumRequestsWaiting,
-		metrics.NumRequestsSwapped,
+		metrics.RealtimeNumRequestsRunning,
 	}
+}
+
+func selectTargetPodWithLeastRequestCount(cache cache.Cache, readyPods []*v1.Pod) *v1.Pod {
+	var targetPod *v1.Pod
+	targetPods := []string{}
+
+	minCount := math.MaxInt32
+	podRequestCount := getRequestCounts(cache, readyPods)
+	for _, totalReq := range podRequestCount {
+		if totalReq <= minCount {
+			minCount = totalReq
+		}
+	}
+	for podname, totalReq := range podRequestCount {
+		if totalReq == minCount {
+			targetPods = append(targetPods, podname)
+		}
+	}
+	if len(targetPods) > 0 {
+		targetPod, _ = utils.FilterPodByName(targetPods[rand.Intn(len(targetPods))], readyPods)
+	}
+	return targetPod
+}
+
+// getRequestCounts returns running request count for each pod tracked by gateway.
+// Note: Currently, gateway instance tracks active running request counts for each pod locally,
+// if multiple gateway instances are active then state is not shared across them.
+// It is advised to run on leader gateway instance.
+// TODO: Support stateful information sync across gateway instances: https://github.com/vllm-project/aibrix/issues/761
+func getRequestCounts(cache cache.Cache, readyPods []*v1.Pod) map[string]int {
+	podRequestCount := map[string]int{}
+	for _, pod := range readyPods {
+		runningReq, err := cache.GetMetricValueByPod(pod.Name, pod.Namespace, metrics.RealtimeNumRequestsRunning)
+		if err != nil {
+			runningReq = &metrics.SimpleMetricValue{Value: 0}
+		}
+		podRequestCount[pod.Name] = int(runningReq.GetSimpleValue())
+	}
+
+	return podRequestCount
 }

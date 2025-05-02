@@ -18,44 +18,26 @@ package utils
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/redis/go-redis/v9"
+
 	"k8s.io/klog/v2"
 )
 
-var (
-	redis_host = GetEnv("REDIS_HOST", "localhost")
-	redis_port = GetEnv("REDIS_PORT", "6379")
-)
-
-// CheckEnvExists checks if an environment variable exists.
-// It returns the value and a boolean indicating its existence.
-func CheckEnvExists(envVar string) (string, bool) {
-	value, exists := os.LookupEnv(envVar)
-	return value, exists
-}
-
-func GetEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
 func GetRedisClient() *redis.Client {
+	redisHost := LoadEnv("REDIS_HOST", "localhost")
+	redisPort := LoadEnv("REDIS_PORT", "6379")
+	redisPassword := LoadEnv("REDIS_PASSWORD", "")
 	// Connect to Redis
 	client := redis.NewClient(&redis.Options{
-		Addr: redis_host + ":" + redis_port,
-		DB:   0, // Default DB
+		Addr:     redisHost + ":" + redisPort,
+		Password: redisPassword,
+		DB:       0, // Default DB
 	})
 	pong, err := client.Ping(context.Background()).Result()
 	if err != nil {
 		klog.Fatalf("Error connecting to Redis: %v", err)
 	}
-	fmt.Println("Connected to Redis:", pong)
-
+	klog.Infof("Connected to Redis: %s", pong)
 	return client
 }

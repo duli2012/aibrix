@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/pkoukk/tiktoken-go"
 	tiktoken_loader "github.com/pkoukk/tiktoken-go-loader"
@@ -73,6 +74,13 @@ func TrimMessage(message string) string {
 	return message
 }
 
+// LookupEnv retrieves an environment variable and returns whether it exists.
+// It returns the value and a boolean indicating its existence.
+func LookupEnv(key string) (string, bool) {
+	value, exists := os.LookupEnv(key)
+	return value, exists
+}
+
 // LoadEnv loads an environment variable or returns a default value if not set.
 func LoadEnv(key, defaultValue string) string {
 	value := os.Getenv(key)
@@ -81,4 +89,34 @@ func LoadEnv(key, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func LoadEnvInt(key string, defaultValue int) int {
+	value := os.Getenv(key)
+	if value != "" {
+		intValue, err := strconv.Atoi(value)
+		if err != nil || intValue <= 0 {
+			klog.Warningf("invalid %s: %s, falling back to default: %d", key, value, defaultValue)
+		} else {
+			klog.Infof("set %s: %d", key, intValue)
+			return intValue
+		}
+	}
+	klog.Infof("set %s: %d, using default value", key, defaultValue)
+	return defaultValue
+}
+
+func LoadEnvFloat(key string, defaultValue float64) float64 {
+	valueStr := os.Getenv(key)
+	if valueStr != "" {
+		value, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil || value <= 0 {
+			klog.Warningf("invalid %s: %s, falling back to default: %g", key, valueStr, defaultValue)
+		} else {
+			klog.Infof("set %s: %g", key, value)
+			return value
+		}
+	}
+	klog.Infof("set %s: %g, using default value", key, defaultValue)
+	return defaultValue
 }

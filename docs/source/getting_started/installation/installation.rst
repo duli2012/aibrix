@@ -52,12 +52,12 @@ Install AIBrix in testing Environments
 
    lambda.rst
    mac-for-desktop.rst
-   terraform-gcp.rst
+   aws.rst
+   gcp.rst
 
 
 Install Individual AIBrix Components
 ------------------------------------
-
 
 Autoscaler
 ^^^^^^^^^^
@@ -75,7 +75,6 @@ Distributed Inference
     kubectl apply -k config/standalone/distributed-inference-controller/
 
 
-
 Model Adapter(Lora)
 ^^^^^^^^^^^^^^^^^^^
 
@@ -84,3 +83,9 @@ Model Adapter(Lora)
     kubectl apply -k config/standalone/model-adapter-controller
 
 
+KV Cache
+^^^^^^^^
+
+.. code:: bash
+
+    kubectl apply -k config/standalone/kv-cache-controller

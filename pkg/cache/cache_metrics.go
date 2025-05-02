@@ -18,7 +18,6 @@ package cache
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	prometheusv1 "github.com/prometheus/client_golang/api/prometheus/v1"
@@ -75,8 +74,7 @@ var (
 		metrics.WaitingLoraAdapters,
 		metrics.RunningLoraAdapters,
 	}
-	// TODO: add a helper function for get methods.
-	podMetricRefreshInterval = getPodMetricRefreshInterval()
+	podMetricRefreshInterval = time.Duration(utils.LoadEnvInt("AIBRIX_POD_METRIC_REFRESH_INTERVAL_MS", defaultPodMetricRefreshIntervalInMS)) * time.Millisecond
 )
 
 func initPrometheusAPI() prometheusv1.API {
@@ -99,21 +97,6 @@ func initPrometheusAPI() prometheusv1.API {
 	return prometheusApi
 }
 
-func getPodMetricRefreshInterval() time.Duration {
-	value := utils.LoadEnv("AIBRIX_POD_METRIC_REFRESH_INTERVAL_MS", "")
-	if value != "" {
-		intValue, err := strconv.Atoi(value)
-		if err != nil || intValue <= 0 {
-			klog.Infof("invalid AIBRIX_POD_METRIC_REFRESH_INTERVAL_MS: %s, falling back to default", value)
-		} else {
-			klog.Infof("using AIBRIX_POD_METRIC_REFRESH_INTERVAL_MS env value for pod metrics refresh interval: %d ms", intValue)
-			return time.Duration(intValue) * time.Millisecond
-		}
-	}
-	klog.Infof("using default refresh interval: %d ms", defaultPodMetricRefreshIntervalInMS)
-	return defaultPodMetricRefreshIntervalInMS * time.Millisecond
-}
-
 func (c *Store) getPodMetricImpl(podName string, metricStore *utils.SyncMap[string, metrics.MetricValue], metricName string) (metrics.MetricValue, error) {
 	metricVal, ok := metricStore.Load(metricName)
 	if !ok {
@@ -128,7 +111,7 @@ func (c *Store) getPodModelMetricName(modelName string, metricName string) strin
 }
 
 func (c *Store) updatePodMetrics() {
-	c.metaPods.Range(func(podName string, metaPod *Pod) bool {
+	c.metaPods.Range(func(key string, metaPod *Pod) bool {
 		if !utils.FilterReadyPod(metaPod.Pod) {
 			// Skip unready pod
 			return true
@@ -329,9 +312,6 @@ func (c *Store) queryUpdatePromQLMetrics(metric metrics.Metric, queryLabels map[
 // TODO: replace in-place metric update podMetrics and podModelMetrics to fresh copy for preventing stale metric keys
 func (c *Store) updatePodRecord(pod *Pod, modelName string, metricName string, scope metrics.MetricScope, metricValue metrics.MetricValue) error {
 	if scope == metrics.PodMetricScope {
-		if modelName != "" {
-			return fmt.Errorf("modelName should be empty for scope %v", scope)
-		}
 		pod.Metrics.Store(metricName, metricValue)
 	} else if scope == metrics.PodModelMetricScope {
 		if modelName == "" {
