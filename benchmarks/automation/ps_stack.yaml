@@ -1,0 +1,206 @@
+# Source: vllm-stack/templates/service-router.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: "vllm-router-service"
+  namespace: default
+  labels:
+    environment: router
+    release: router
+spec:
+  type: ClusterIP
+  ports:
+    - name: "router-sport"
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+  selector:
+    environment: router
+    release: router
+---
+# Source: vllm-stack/templates/service-vllm.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: "vllm-engine-service"
+  namespace: default
+  labels:
+    environment: test
+    release: test
+spec:
+  type: ClusterIP
+  ports:
+    - name: "service-port"
+      port: 80
+      targetPort: "container-port"
+      protocol: TCP
+  selector:
+    environment: test
+    release: test
+---
+# Source: vllm-stack/templates/deployment-router.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "vllm-deployment-router"
+  namespace: default
+  labels:
+    environment: router
+    release: router
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 100%
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      environment: router
+      release: router
+  template:
+    metadata:
+      labels:
+        environment: router
+        release: router
+    spec:
+      containers:
+      - name: router-container
+        image: "lmcache/lmstack-router:latest"
+        imagePullPolicy: "Always"
+        env:
+        args:
+          - "--host"
+          - "0.0.0.0"
+          - "--port"
+          - "8000"
+          - "--service-discovery"
+          - "k8s"
+          - "--k8s-namespace"
+          - "default"
+          - "--k8s-label-selector"
+          - environment=test,release=test
+          - "--routing-logic"
+          - "session"
+          - "--session-key"
+          - "x-user-id"
+          - "--engine-stats-interval"
+          - "15"
+          - "--request-stats-window"
+          - "60"
+        resources:
+          requests:
+            cpu: "2"
+            memory: "8G"
+          limits:
+            cpu: "2"
+            memory: "8G"
+        ports:
+          - name: "router-cport"
+            containerPort: 8000
+
+        livenessProbe:
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "vllm-deepseek-r1-deployment"
+  namespace: default
+  labels:
+    # Must match the Service selector below
+    model.aibrix.ai/name: deepseek-r1-distill-llama-8b
+    environment: test
+    release: test
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      model.aibrix.ai/name: deepseek-r1-distill-llama-8b
+      environment: test
+      release: test
+  progressDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        model.aibrix.ai/name: deepseek-r1-distill-llama-8b
+        environment: test
+        release: test
+    spec:
+      runtimeClassName: nvidia         # <-- ensure GPU runtime is used
+      containers:
+        - name: vllm-openai
+          image: vllm/vllm-openai:v0.7.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -m
+            - vllm.entrypoints.openai.api_server
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8000"
+            - --model
+            - deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+            - --served-model-name
+            - deepseek-r1-distill-llama-8b
+            - --max-model-len
+            - "12288"
+          ports:
+            - name: serve
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              scheme: HTTP
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 1
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 5
+            timeoutSeconds: 1
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              scheme: HTTP
+            failureThreshold: 5
+            periodSeconds: 5
+            timeoutSeconds: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deepseek-r1-distill-llama-8b
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    model.aibrix.ai/name: deepseek-r1-distill-llama-8b
+    environment: test
+    release: test
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

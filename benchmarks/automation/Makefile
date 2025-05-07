@@ -1,6 +1,19 @@
 .PHONY: all clean setup-env setup-k8s install-aibrix deploy-model benchmark
+all: help
 
-all: setup-env setup-k8s install-aibrix deploy-model benchmark
+help:
+	@echo "Available targets:"
+	@echo "  aibrix         - Setup environment, K8s, install AIBrix, and run benchmarks"
+	@echo "  ps             - Setup environment, K8s, install ProductionStack, and run benchmarks"
+	@echo "  setup-env      - Setup the environment"
+	@echo "  setup-k8s      - Setup Kubernetes cluster"
+	@echo "  install-aibrix - Install AIBrix and deploy model"
+	@echo "  install-ps     - Install ProductionStack and deploy model"
+	@echo "  benchmark      - Run benchmarking tests"
+	@echo "  clean          - Clean up resources and terminate K8s cluster"
+
+aibrix: setup-env setup-k8s install-aibrix benchmark
+ps: setup-env setup-k8s install-ps benchmark
 
 setup-env:
 	@echo "Setting up environment..."
@@ -16,11 +29,13 @@ install-aibrix:
 	@echo "Installing AIBrix..."
 	@chmod +x install_aibrix.sh
 	@./install_aibrix.sh
-
-deploy-model:
-	@echo "Deploying model..."
 	@chmod +x deploy_model.sh
 	@./deploy_model.sh
+
+install-ps:
+	@echo "Installing ProductonStack..."
+	@chmod +x install_deploy_ps.sh
+	@./install_deploy_ps.sh
 
 benchmark:
 	@echo "Running benchmark..."
