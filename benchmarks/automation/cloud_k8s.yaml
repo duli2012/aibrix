@@ -7,7 +7,7 @@ resources:
 num_nodes: 1
 
 envs:
-  SKY_K3S_TOKEN: kSr1251b6QrKfQ0nxbEJ8w==
+  SKY_K3S_TOKEN: hcTb0z/PBUH0JesKXmPttA==
 
 run: |
   wait_for_gpu_operator_installation() {
@@ -89,16 +89,11 @@ run: |
     --set 'toolkit.env[2].value=nvidia'
 
   wait_for_gpu_operator_installation
- 
-  # Install kube-prometheus-stack
-  echo "Installing kube-prometheus-stack"
-  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-  helm repo update
-  helm install kube-prometheus-stack \
-  --create-namespace \
-  --namespace kube-prometheus-stack \
-  prometheus-community/kube-prometheus-stack
 
+  # =========== Prometheus setup ===========
+  echo "Setting up Prometheus..."
+  chmod +x benchmarks/automation/setup_prometheus.sh
+  ./benchmarks/automation/setup_prometheus.sh
 
   # Create RuntimeClass
   sleep 5

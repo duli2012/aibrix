@@ -1,3 +1,4 @@
+# ServiceMonitor for deepseek-r1
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -16,4 +17,189 @@ spec:
   endpoints:
     - port: http
       interval: 15s
+---
+# ServiceMonitor for deepseek-r1 vLLM metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: deepseek-r1-vllm
+  namespace: default
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      prometheus-discovery: "true"
+  endpoints:
+    - port: vllm
+      path: /metrics
+      interval: 15s
+---
+# Prometheus ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: kube-prometheus-stack
+data:
+  prometheus.yaml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      query_log_file: /var/log/prometheus/query.log
+
+    scrape_configs:
+      - job_name: 'vllm-metrics'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: kubernetes_service_name
+---
+# Prometheus PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-logs
+  namespace: kube-prometheus-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Log Exporter ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: log-exporter-config
+  namespace: kube-prometheus-stack
+data:
+  nginx.conf: |
+    events {
+      worker_connections 1024;
+    }
+    http {
+      server {
+        listen 8080;
+        location / {
+          root /logs;
+          autoindex on;
+          autoindex_exact_size off;
+          autoindex_format html;
+          autoindex_localtime on;
+        }
+      }
+    }
+---
+# Log Exporter Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-exporter
+  namespace: kube-prometheus-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-exporter
+  template:
+    metadata:
+      labels:
+        app: log-exporter
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: logs
+          mountPath: /logs
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+      volumes:
+      - name: logs
+        persistentVolumeClaim:
+          claimName: prometheus-logs
+      - name: nginx-config
+        configMap:
+          name: log-exporter-config
+---
+# Log Exporter Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-exporter
+  namespace: kube-prometheus-stack
+spec:
+  selector:
+    app: log-exporter
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP
+---
+# Prometheus StatefulSet Patch
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prometheus-kube-prometheus-stack-prometheus
+  namespace: kube-prometheus-stack
+spec:
+  template:
+    spec:
+      containers:
+      - name: prometheus
+        command:
+        - /bin/sh
+        - -c
+        - |
+          mkdir -p /var/log/prometheus && chmod 777 /var/log/prometheus && /bin/prometheus $@
+        args:
+        - --config.file=/etc/prometheus/prometheus.yaml
+        - --storage.tsdb.path=/prometheus
+        - --web.console.libraries=/usr/share/prometheus/console_libraries
+        - --web.console.templates=/usr/share/prometheus/consoles
+        - --web.enable-lifecycle
+        - --storage.tsdb.retention.time=15d
+        - --web.enable-admin-api
+        - --web.enable-remote-write-receiver
+        - --query.log-file=/var/log/prometheus/query.log
+        volumeMounts:
+        - name: prometheus-logs
+          mountPath: /var/log/prometheus
+        - name: prometheus-config
+          mountPath: /etc/prometheus/prometheus.yaml
+          subPath: prometheus.yaml
+      volumes:
+      - name: prometheus-logs
+        persistentVolumeClaim:
+          claimName: prometheus-logs
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
 

@@ -1,4 +1,4 @@
-.PHONY: all clean setup-env setup-k8s install-aibrix deploy-model benchmark
+.PHONY: all clean setup-env setup-k8s setup-prometheus install-aibrix deploy-model benchmark
 all: help
 
 help:
@@ -7,13 +7,14 @@ help:
 	@echo "  ps             - Setup environment, K8s, install ProductionStack, and run benchmarks"
 	@echo "  setup-env      - Setup the environment"
 	@echo "  setup-k8s      - Setup Kubernetes cluster"
+	@echo "  setup-prometheus - Setup Prometheus monitoring"
 	@echo "  install-aibrix - Install AIBrix and deploy model"
 	@echo "  install-ps     - Install ProductionStack and deploy model"
 	@echo "  benchmark      - Run benchmarking tests"
 	@echo "  clean          - Clean up resources and terminate K8s cluster"
 
-aibrix: setup-env setup-k8s install-aibrix benchmark
-ps: setup-env setup-k8s install-ps benchmark
+aibrix: setup-env setup-k8s setup-prometheus install-aibrix #benchmark
+ps: setup-env setup-k8s setup-prometheus install-ps #benchmark
 
 setup-env:
 	@echo "Setting up environment..."
@@ -24,6 +25,11 @@ setup-k8s:
 	@echo "Setting up Kubernetes cluster..."
 	@chmod +x launch_k8s.sh
 	@./launch_k8s.sh
+
+setup-prometheus:
+	@echo "Setting up Prometheus monitoring..."
+	@chmod +x setup_prometheus.sh
+	@./setup_prometheus.sh
 
 install-aibrix:
 	@echo "Installing AIBrix..."

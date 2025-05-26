@@ -108,7 +108,7 @@ metadata:
   namespace: default
 spec:
   ports:
-    - name: serve
+    - name: vllm
       port: 8000
       protocol: TCP
       targetPort: 8000
@@ -119,23 +119,3 @@ spec:
   selector:
     model.aibrix.ai/name: deepseek-r1-distill-llama-8b
   type: ClusterIP
-
----
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: deepseek-r1-distill-llama-8b
-  namespace: default
-  labels:
-    release: kube-prometheus-stack   # or whatever your Prometheus CR expects
-spec:
-  namespaceSelector:
-    matchNames:
-      - default
-  selector:
-    matchLabels:
-      prometheus-discovery: "true"
-  endpoints:
-    - port: http
-      path: /metrics
-      interval: 15s

@@ -62,7 +62,6 @@ if [ ! -d "${RESULTS_DIR}" ]; then
 fi
 log "Results directory created successfully"
 
-
 # Create a Kubernetes deployment to run the benchmark
 log "Creating benchmark deployment..."
 cat <<EOF | kubectl apply -f -
@@ -83,13 +82,14 @@ spec:
       containers:
       - name: benchmark
         image: wangn19/runtime:benchmarking
+        # image: aibrix/runtime:nightly
         command:
         - bash
         - -c
         - |
           set -x
           echo "Starting benchmark with model: ${MODEL_NAME}"
-          
+
           # Install curl if not present
           if ! command -v curl &> /dev/null; then
             echo "Installing curl..."
@@ -106,7 +106,6 @@ spec:
               \"prompt\": \"Hello\",
               \"max_tokens\": 50
             }"
-          
           # Run benchmark with specified host and port
           aibrix_benchmark -m ${MODEL_NAME} -o ${MODEL_NAME} \
             --input-start 4 \
@@ -119,6 +118,7 @@ spec:
             --port 8000 \
             --host "${MODEL_NAME}.default.svc.cluster.local" \
             --output /results/${MODEL_NAME}.jsonl
+          # ./benchmark.sh all
           
           echo "Benchmark completed with exit code: $?"
           
@@ -145,6 +145,9 @@ kubectl rollout status deployment/${MODEL_NAME}-benchmark-${DATETIME} --timeout=
 
 # Get the pod name
 DEPLOYMENT_POD=$(kubectl get pods -l app=${MODEL_NAME}-benchmark -o jsonpath='{.items[0].metadata.name}')
+
+# Print the deployment pod name for debugging
+log "Deployment pod name: ${DEPLOYMENT_POD}"
 
 #TODO: Need a better way to check if the benchmark is complete)
 log "Waiting for benchmark to complete..."
