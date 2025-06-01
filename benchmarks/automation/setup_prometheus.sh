@@ -43,6 +43,7 @@ done
 # Apply Prometheus configuration
 echo "Applying Prometheus configuration..."
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+DASHBOARD_FILE="${SCRIPT_DIR}/full_unified_dashboard_import.json"
 kubectl apply -f "${SCRIPT_DIR}/prometheus.yaml"
 
 # Wait for Prometheus to be ready
@@ -87,4 +88,55 @@ else
   echo "  Password: prom-operator"
 fi
 
-echo "Prometheus setup completed!" 
+# Import unified vLLM dashboard
+import_dashboard() {
+    echo "Importing unified vLLM dashboard..."
+    
+    if [ ! -f "$DASHBOARD_FILE" ]; then
+        echo "Warning: Dashboard file not found: $DASHBOARD_FILE"
+        echo "Skipping dashboard import. You can manually import it later via Grafana UI."
+        return 0
+    fi
+    
+    # Get Grafana admin password
+    GRAFANA_PASSWORD=$(kubectl get secret -n kube-prometheus-stack kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 --decode)
+    
+    # Import dashboard via API
+    echo "Importing dashboard via Grafana API..."
+    
+    IMPORT_PAYLOAD=$(cat "$DASHBOARD_FILE")
+    
+    RESPONSE=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -u "admin:$GRAFANA_PASSWORD" \
+        -d "$IMPORT_PAYLOAD" \
+        http://localhost:3000/api/dashboards/db)
+    
+    if echo "$RESPONSE" | jq -e '.status == "success"' > /dev/null 2>&1; then
+        DASHBOARD_URL=$(echo "$RESPONSE" | jq -r '.url')
+        echo "✅ Dashboard imported successfully!"
+        echo "Dashboard URL: http://localhost:3000$DASHBOARD_URL"
+    else
+        echo "❌ Failed to import dashboard. Response: $RESPONSE"
+        echo "You can manually import the dashboard from: $DASHBOARD_FILE"
+    fi
+}
+
+# Import the dashboard
+import_dashboard
+
+echo ""
+echo "🎉 Prometheus setup completed!"
+echo ""
+echo "📊 Access URLs:"
+echo "  • Prometheus: http://localhost:9090"
+echo "  • Grafana: http://localhost:3000 (admin/prom-operator)"
+echo "  • Logs: http://localhost:18080/query.log"
+echo ""
+echo "📈 Dashboard:"
+echo "  • Unified vLLM Monitoring: http://localhost:3000/d/complete-unified-vllm-monitoring/complete-unified-vllm-monitoring-aibrix-and-ps"
+echo ""
+echo "🔧 Next steps:"
+echo "  • Deploy vLLM services with monitoring labels"
+echo "  • Send test requests to generate metrics"
+echo "  • View metrics in the dashboard" 

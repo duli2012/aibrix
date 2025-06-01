@@ -1,3 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vllm-router-sa
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vllm-router-role
+  namespace: default
+rules:
+  # allow watching pods
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get","list","watch"]
+  # allow watching services if you're using service discovery by Service
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get","list","watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vllm-router-rb
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: vllm-router-sa
+    namespace: default
+roleRef:
+  kind: Role
+  name: vllm-router-role
+  apiGroup: rbac.authorization.k8s.io
+---
 # Source: vllm-stack/templates/service-router.yaml
 apiVersion: v1
 kind: Service
@@ -7,11 +42,20 @@ metadata:
   labels:
     environment: router
     release: router
+    prometheus-discovery: "true"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
 spec:
   type: ClusterIP
   ports:
     - name: "router-sport"
       port: 80
+      targetPort: 8000
+      protocol: TCP
+    - name: "vllm"
+      port: 8000
       targetPort: 8000
       protocol: TCP
   selector:
@@ -27,12 +71,21 @@ metadata:
   labels:
     environment: test
     release: test
+    prometheus-discovery: "true"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
 spec:
   type: ClusterIP
   ports:
-    - name: "service-port"
+    - name: "http"
       port: 80
-      targetPort: "container-port"
+      targetPort: serve
+      protocol: TCP
+    - name: "vllm"
+      port: 8000
+      targetPort: 8000
       protocol: TCP
   selector:
     environment: test
@@ -63,11 +116,11 @@ spec:
         environment: router
         release: router
     spec:
+      serviceAccountName: vllm-router-sa
       containers:
       - name: router-container
         image: "lmcache/lmstack-router:latest"
         imagePullPolicy: "Always"
-        env:
         args:
           - "--host"
           - "0.0.0.0"

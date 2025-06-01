@@ -1,28 +1,8 @@
-# ServiceMonitor for deepseek-r1
+# Unified ServiceMonitor for AIBrix deployments
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: deepseek-r1-svc-discover
-  namespace: default
-  labels:
-    release: kube-prometheus-stack
-    prometheus-discovery: "true"
-spec:
-  namespaceSelector:
-    matchNames:
-      - default
-  selector:
-    matchLabels:
-      prometheus-discovery: "true" 
-  endpoints:
-    - port: http
-      interval: 15s
----
-# ServiceMonitor for deepseek-r1 vLLM metrics
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: deepseek-r1-vllm
+  name: unified-vllm-aibrix
   namespace: default
   labels:
     release: kube-prometheus-stack
@@ -33,10 +13,44 @@ spec:
   selector:
     matchLabels:
       prometheus-discovery: "true"
+    matchExpressions:
+      - key: model.aibrix.ai/name
+        operator: Exists
   endpoints:
     - port: vllm
       path: /metrics
       interval: 15s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_service_label_model_aibrix_ai_name]
+          targetLabel: model_name
+        - targetLabel: deployment_type
+          replacement: aibrix
+---
+# Unified ServiceMonitor for PS deployments  
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: unified-vllm-ps
+  namespace: default
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      prometheus-discovery: "true"
+      environment: test
+  endpoints:
+    - port: vllm
+      path: /metrics
+      interval: 15s
+      relabelings:
+        - targetLabel: deployment_type
+          replacement: ps
+        - sourceLabels: [__meta_kubernetes_service_label_model_aibrix_ai_name]
+          targetLabel: model_name
 ---
 # Prometheus ConfigMap
 apiVersion: v1
@@ -48,34 +62,219 @@ data:
   prometheus.yaml: |
     global:
       scrape_interval: 15s
-      evaluation_interval: 15s
-      query_log_file: /var/log/prometheus/query.log
+      scrape_timeout: 10s
 
     scrape_configs:
-      - job_name: 'vllm-metrics'
+      # Generic vLLM metrics collection (works for both AIBrix and PS)
+      - job_name: 'vllm-generic'
         kubernetes_sd_configs:
           - role: endpoints
+            namespaces:
+              names:
+                - default
         relabel_configs:
+          # Only scrape endpoints with prometheus.io/scrape annotation
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
             action: keep
             regex: true
+          
+          # Use custom port if specified
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: ${__meta_kubernetes_pod_ip}:${1}
+          
+          # Use custom metrics path if specified
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
             action: replace
             target_label: __metrics_path__
             regex: (.+)
-          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
-            action: replace
-            target_label: __address__
-            regex: ([^:]+)(?::\d+)?;(\d+)
-            replacement: $1:$2
-          - action: labelmap
-            regex: __meta_kubernetes_service_label_(.+)
-          - source_labels: [__meta_kubernetes_namespace]
-            action: replace
-            target_label: kubernetes_namespace
+          
+          # Add service name as job label
           - source_labels: [__meta_kubernetes_service_name]
             action: replace
-            target_label: kubernetes_service_name
+            target_label: job
+          
+          # Add namespace label
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          
+          # Add pod name label
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          
+          # Add service name label
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: service
+          
+          # Add container name label
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            action: replace
+            target_label: container
+          
+          # Add model name from service label
+          - source_labels: [__meta_kubernetes_service_label_model_aibrix_ai_name]
+            action: replace
+            target_label: model_name
+          
+          # Detect AIBrix deployment (has prometheus-discovery label and aibrix-runtime container)
+          - source_labels: [__meta_kubernetes_service_label_prometheus_discovery, __meta_kubernetes_pod_container_name]
+            action: replace
+            target_label: deployment_type
+            regex: true;aibrix-runtime
+            replacement: aibrix
+          
+          # Detect PS deployment (has environment=test or environment=router labels)
+          - source_labels: [__meta_kubernetes_service_label_environment]
+            action: replace
+            target_label: deployment_type
+            regex: (test|router)
+            replacement: ps
+          
+          # Default deployment type if not detected
+          - source_labels: [deployment_type]
+            action: replace
+            target_label: deployment_type
+            regex: ^$
+            replacement: unknown
+
+      # AIBrix specific metrics collection
+      - job_name: 'aibrix-runtime'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - default
+        relabel_configs:
+          # Only scrape services with prometheus-discovery label
+          - source_labels: [__meta_kubernetes_service_label_prometheus_discovery]
+            action: keep
+            regex: true
+          
+          # Only scrape aibrix-runtime containers
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            action: keep
+            regex: aibrix-runtime
+          
+          # Use port 8080 for aibrix-runtime metrics
+          - source_labels: [__meta_kubernetes_pod_ip]
+            action: replace
+            target_label: __address__
+            replacement: ${1}:8080
+          
+          # Add deployment type label
+          - action: replace
+            target_label: deployment_type
+            replacement: aibrix
+          
+          # Add model name from service label
+          - source_labels: [__meta_kubernetes_service_label_model_aibrix_ai_name]
+            action: replace
+            target_label: model_name
+          
+          # Add standard labels
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: job
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: service
+
+      # PS Engine specific metrics collection
+      - job_name: 'ps-engine'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - default
+        relabel_configs:
+          # Only scrape services with environment=test label
+          - source_labels: [__meta_kubernetes_service_label_environment]
+            action: keep
+            regex: test
+          
+          # Use port 8000 for vLLM metrics
+          - source_labels: [__meta_kubernetes_pod_ip]
+            action: replace
+            target_label: __address__
+            replacement: ${1}:8000
+          
+          # Add deployment type label
+          - action: replace
+            target_label: deployment_type
+            replacement: ps
+          
+          # Add model name from service label
+          - source_labels: [__meta_kubernetes_service_label_model_aibrix_ai_name]
+            action: replace
+            target_label: model_name
+          
+          # Add standard labels
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: job
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: service
+
+      # PS Router specific metrics collection
+      - job_name: 'ps-router'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - default
+        relabel_configs:
+          # Only scrape services with environment=router label
+          - source_labels: [__meta_kubernetes_service_label_environment]
+            action: keep
+            regex: router
+          
+          # Use port 8000 for vLLM metrics
+          - source_labels: [__meta_kubernetes_pod_ip]
+            action: replace
+            target_label: __address__
+            replacement: ${1}:8000
+          
+          # Add deployment type label
+          - action: replace
+            target_label: deployment_type
+            replacement: ps
+          
+          # Add model name from service label  
+          - source_labels: [__meta_kubernetes_service_label_model_aibrix_ai_name]
+            action: replace
+            target_label: model_name
+          
+          # Add standard labels
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: job
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: service
 ---
 # Prometheus PVC
 apiVersion: v1
