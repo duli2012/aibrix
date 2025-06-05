@@ -1,4 +1,4 @@
-.PHONY: all clean setup-env setup-k8s setup-prometheus install-aibrix deploy-model benchmark
+.PHONY: all clean setup-env setup-k8s setup-prometheus install-aibrix deploy-model benchmark stop-aibrix stop-ps switch-to-aibrix switch-to-ps
 all: help
 
 help:
@@ -10,6 +10,10 @@ help:
 	@echo "  setup-prometheus - Setup Prometheus monitoring"
 	@echo "  install-aibrix - Install AIBrix and deploy model"
 	@echo "  install-ps     - Install ProductionStack and deploy model"
+	@echo "  stop-aibrix    - Stop/uninstall AIBrix (keeps base infrastructure)"
+	@echo "  stop-ps        - Stop/uninstall ProductionStack (keeps base infrastructure)"
+	@echo "  switch-to-aibrix - Stop PS and start AIBrix (fast switching)"
+	@echo "  switch-to-ps   - Stop AIBrix and start PS (fast switching)"
 	@echo "  benchmark      - Run benchmarking tests"
 	@echo "  clean          - Clean up resources and terminate K8s cluster"
 
@@ -42,6 +46,22 @@ install-ps:
 	@echo "Installing ProductonStack..."
 	@chmod +x install_deploy_ps.sh
 	@./install_deploy_ps.sh
+
+stop-aibrix:
+	@echo "Stopping AIBrix deployment..."
+	@chmod +x stop_aibrix.sh
+	@./stop_aibrix.sh
+
+stop-ps:
+	@echo "Stopping ProductionStack deployment..."
+	@chmod +x stop_ps.sh
+	@./stop_ps.sh
+
+switch-to-aibrix: stop-ps install-aibrix
+	@echo "Successfully switched to AIBrix!"
+
+switch-to-ps: stop-aibrix install-ps
+	@echo "Successfully switched to ProductionStack!"
 
 benchmark:
 	@echo "Running benchmark..."
