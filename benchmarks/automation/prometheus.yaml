@@ -198,16 +198,16 @@ data:
               names:
                 - default
         relabel_configs:
-          # Only scrape services with environment=test label
+          # Only scrape services with environment=test or environment=router
           - source_labels: [__meta_kubernetes_service_label_environment]
             action: keep
-            regex: test
+            regex: (test|router)
           
-          # Use port 8000 for vLLM metrics
+          # Use port 8080 for PS engine metrics
           - source_labels: [__meta_kubernetes_pod_ip]
             action: replace
             target_label: __address__
-            replacement: ${1}:8000
+            replacement: ${1}:8080
           
           # Add deployment type label
           - action: replace
@@ -232,51 +232,8 @@ data:
           - source_labels: [__meta_kubernetes_service_name]
             action: replace
             target_label: service
-
-      # PS Router specific metrics collection
-      - job_name: 'ps-router'
-        kubernetes_sd_configs:
-          - role: endpoints
-            namespaces:
-              names:
-                - default
-        relabel_configs:
-          # Only scrape services with environment=router label
-          - source_labels: [__meta_kubernetes_service_label_environment]
-            action: keep
-            regex: router
-          
-          # Use port 8000 for vLLM metrics
-          - source_labels: [__meta_kubernetes_pod_ip]
-            action: replace
-            target_label: __address__
-            replacement: ${1}:8000
-          
-          # Add deployment type label
-          - action: replace
-            target_label: deployment_type
-            replacement: ps
-          
-          # Add model name from service label  
-          - source_labels: [__meta_kubernetes_service_label_model_aibrix_ai_name]
-            action: replace
-            target_label: model_name
-          
-          # Add standard labels
-          - source_labels: [__meta_kubernetes_service_name]
-            action: replace
-            target_label: job
-          - source_labels: [__meta_kubernetes_namespace]
-            action: replace
-            target_label: namespace
-          - source_labels: [__meta_kubernetes_pod_name]
-            action: replace
-            target_label: pod
-          - source_labels: [__meta_kubernetes_service_name]
-            action: replace
-            target_label: service
 ---
-# Prometheus PVC
+# Prometheus Logs PVC
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -289,7 +246,7 @@ spec:
     requests:
       storage: 10Gi
 ---
-# Log Exporter ConfigMap
+# Metric Data Exporter ConfigMap
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -301,19 +258,462 @@ data:
       worker_connections 1024;
     }
     http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+      
       server {
         listen 8080;
         location / {
-          root /logs;
+          root /metrics;
           autoindex on;
           autoindex_exact_size off;
           autoindex_format html;
           autoindex_localtime on;
         }
+        location /dashboard {
+          alias /web/dashboard.html;
+          add_header Content-Type text/html;
+        }
+        location /api/export {
+          proxy_pass http://127.0.0.1:8081/export;
+        }
+        location /api/list {
+          proxy_pass http://127.0.0.1:8081/list;
+        }
       }
     }
+  dashboard.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>vLLM Metric Data Exporter</title>
+        <meta charset="utf-8">
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            h1 { color: #333; border-bottom: 3px solid #007acc; padding-bottom: 10px; }
+            .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+            .button { background: #007acc; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }
+            .button:hover { background: #005a99; }
+            .button:disabled { background: #ccc; cursor: not-allowed; }
+            .success { color: #28a745; }
+            .error { color: #dc3545; }
+            .info { color: #17a2b8; }
+            input[type="number"] { padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 80px; }
+            .export-list { max-height: 400px; overflow-y: auto; }
+            .export-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+            .export-item:hover { background: #f8f9fa; }
+            .file-info { flex-grow: 1; }
+            .file-actions { display: flex; gap: 10px; }
+            .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+            .loading { display: none; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🚀 vLLM Metric Data Exporter</h1>
+            
+            <div class="section">
+                <h2>📊 Export Current Metrics</h2>
+                <p>Export vLLM performance metrics to downloadable files for analysis or Grafana import.</p>
+                
+                <div style="margin: 15px 0;">
+                    <label>Time Range (hours): </label>
+                    <input type="number" id="hoursInput" value="1" min="1" max="168" />
+                    <button class="button" onclick="exportMetrics()">Export Metrics</button>
+                    <span class="loading" id="exportLoading">⏳ Exporting...</span>
+                </div>
+                
+                <div id="exportStatus"></div>
+            </div>
+            
+            <div class="section">
+                <h2>📁 Available Metric Exports</h2>
+                <button class="button" onclick="refreshList()">🔄 Refresh List</button>
+                <div id="exportList"></div>
+            </div>
+            
+            <div class="section">
+                <h2>📋 Exported Metrics</h2>
+                <p>Each export contains the following vLLM metrics:</p>
+                <ul>
+                    <li><strong>cache_config_info</strong> - Cache configuration details</li>
+                    <li><strong>generation_tokens_total</strong> - Total tokens generated</li>
+                    <li><strong>prompt_tokens_total</strong> - Total prompt tokens processed</li>
+                    <li><strong>num_requests_running</strong> - Currently running requests</li>
+                    <li><strong>num_requests_waiting</strong> - Queued requests</li>
+                    <li><strong>gpu_cache_usage_perc</strong> - GPU cache utilization</li>
+                    <li><strong>gpu_prefix_cache_hit_rate</strong> - Cache hit rate</li>
+                    <li><strong>e2e_request_latency_seconds</strong> - End-to-end latency</li>
+                    <li><strong>time_to_first_token_seconds</strong> - Time to first token</li>
+                    <li><strong>iteration_tokens_total</strong> - Total iteration tokens</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>🔗 Quick Links</h2>
+                <a href="/" class="button">📂 File Browser</a>
+                <a href="http://localhost:3000" class="button" target="_blank">📊 Grafana Dashboard</a>
+                <a href="http://localhost:9090" class="button" target="_blank">🔍 Prometheus Console</a>
+            </div>
+        </div>
+        
+        <script>
+            function showStatus(message, type = 'info') {
+                const status = document.getElementById('exportStatus');
+                status.className = `status ${type}`;
+                status.innerHTML = message;
+                status.style.display = 'block';
+            }
+            
+            function exportMetrics() {
+                const hours = document.getElementById('hoursInput').value;
+                const loading = document.getElementById('exportLoading');
+                
+                loading.style.display = 'inline';
+                showStatus('Starting metric export...', 'info');
+                
+                fetch(`/api/export?hours=${hours}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        loading.style.display = 'none';
+                        if (data.status === 'success') {
+                            showStatus(`
+                                ✅ <strong>Export Successful!</strong><br>
+                                📄 Files: ${data.compressed_file} & ${data.uncompressed_file}<br>
+                                📊 Metrics exported: ${data.metrics_exported} (${data.errors} errors)<br>
+                                ⏱️ Time range: ${data.time_range}<br>
+                                <a href="${data.download_urls.compressed}" class="button">Download Compressed</a>
+                                <a href="${data.download_urls.uncompressed}" class="button">Download JSON</a>
+                            `, 'success');
+                            refreshList();
+                        } else {
+                            showStatus(`❌ Export failed: ${data.message || 'Unknown error'}`, 'error');
+                        }
+                    })
+                    .catch(error => {
+                        loading.style.display = 'none';
+                        showStatus(`❌ Export failed: ${error.message}`, 'error');
+                    });
+            }
+            
+            function refreshList() {
+                fetch('/api/list')
+                    .then(response => response.json())
+                    .then(data => {
+                        const listDiv = document.getElementById('exportList');
+                        
+                        if (data.status === 'success' && data.exports.length > 0) {
+                            listDiv.innerHTML = `
+                                <p><strong>${data.count} exports found (${data.total_size_mb} MB total)</strong></p>
+                                <div class="export-list">
+                                    ${data.exports.map(exp => `
+                                        <div class="export-item">
+                                            <div class="file-info">
+                                                <strong>${exp.filename}</strong><br>
+                                                <small>
+                                                    📅 ${new Date(exp.created).toLocaleString()} | 
+                                                    📁 ${exp.size_mb} MB | 
+                                                    📦 ${exp.type}
+                                                </small>
+                                            </div>
+                                            <div class="file-actions">
+                                                <a href="${exp.download_url}" class="button">Download</a>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            `;
+                        } else {
+                            listDiv.innerHTML = '<p>No metric exports found. Create your first export above!</p>';
+                        }
+                    })
+                    .catch(error => {
+                        document.getElementById('exportList').innerHTML = `<p class="error">Failed to load exports: ${error.message}</p>`;
+                    });
+            }
+            
+            // Load the list on page load
+            document.addEventListener('DOMContentLoaded', refreshList);
+        </script>
+    </body>
+    </html>
+  metric_exporter.py: |
+    #!/usr/bin/env python3
+    import os
+    import json
+    import time
+    import requests
+    import gzip
+    from datetime import datetime, timedelta
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.parse import urlparse, parse_qs, unquote
+    import threading
+    
+    PROMETHEUS_URL = "http://kube-prometheus-stack-prometheus:9090"
+    METRICS_DIR = "/metrics"
+    
+    # Key vLLM metrics to export
+    VLLM_METRICS = [
+        'vllm:cache_config_info',
+        'vllm:generation_tokens_total',
+        'vllm:prompt_tokens_total', 
+        'vllm:num_requests_running',
+        'vllm:num_requests_waiting',
+        'vllm:gpu_cache_usage_perc',
+        'vllm:gpu_prefix_cache_hit_rate',
+        'vllm:e2e_request_latency_seconds_bucket',
+        'vllm:time_to_first_token_seconds_bucket',
+        'vllm:iteration_tokens_total'
+    ]
+    
+    class MetricExportHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith('/export'):
+                self.export_metrics()
+            elif self.path.startswith('/list'):
+                self.list_exports()
+            else:
+                self.send_error(404)
+
+        def export_metrics(self):
+            """Export current vLLM metric data to continuous file"""
+            try:
+                # Parse query parameters
+                parsed = urlparse(self.path)
+                params = parse_qs(parsed.query)
+                
+                # Default time range: last 1 hour
+                end_time = int(time.time())
+                start_time = end_time - 3600  # 1 hour ago
+                
+                if 'hours' in params:
+                    hours = int(params['hours'][0])
+                    start_time = end_time - (hours * 3600)
+                
+                # Initialize data structure
+                metric_data = {
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'export_time': datetime.now().isoformat(),
+                    'metrics': {}
+                }
+                
+                print(f"Exporting metrics from {datetime.fromtimestamp(start_time)} to {datetime.fromtimestamp(end_time)}")
+                
+                # Export each metric
+                for metric in VLLM_METRICS:
+                    try:
+                        # Get instant values (current state)
+                        instant_url = f"{PROMETHEUS_URL}/api/v1/query"
+                        instant_params = {'query': metric}
+                        instant_response = requests.get(instant_url, params=instant_params, timeout=30)
+                        
+                        # Get range values (historical data)
+                        range_url = f"{PROMETHEUS_URL}/api/v1/query_range"
+                        range_params = {
+                            'query': metric,
+                            'start': start_time,
+                            'end': end_time,
+                            'step': '15s'
+                        }
+                        range_response = requests.get(range_url, params=range_params, timeout=30)
+                        
+                        metric_data['metrics'][metric] = {
+                            'instant': None,
+                            'range': None
+                        }
+                        
+                        if instant_response.status_code == 200:
+                            instant_data = instant_response.json()
+                            if instant_data['status'] == 'success':
+                                metric_data['metrics'][metric]['instant'] = instant_data['data']
+                        
+                        if range_response.status_code == 200:
+                            range_data = range_response.json()
+                            if range_data['status'] == 'success':
+                                metric_data['metrics'][metric]['range'] = range_data['data']
+                        
+                        print(f"✅ Exported {metric}")
+                        
+                    except Exception as e:
+                        print(f"❌ Error exporting {metric}: {e}")
+                        metric_data['metrics'][metric] = {'error': str(e)}
+                
+                # Save to continuous file - APPEND TO EXISTING FILE
+                base_filename = "vllm_metrics_continuous"
+                compressed_filename = f"{base_filename}.json.gz"
+                uncompressed_filename = f"{base_filename}.json"
+                
+                compressed_filepath = os.path.join(METRICS_DIR, compressed_filename)
+                uncompressed_filepath = os.path.join(METRICS_DIR, uncompressed_filename)
+                
+                os.makedirs(METRICS_DIR, exist_ok=True)
+                
+                # Load existing data if file exists
+                existing_data = {'exports': []}
+                if os.path.exists(uncompressed_filepath):
+                    try:
+                        with open(uncompressed_filepath, 'r') as f:
+                            existing_data = json.load(f)
+                        if 'exports' not in existing_data:
+                            existing_data = {'exports': [existing_data]}  # Wrap single export
+                    except:
+                        existing_data = {'exports': []}
+                
+                # Add current export with timestamp
+                current_export = {
+                    'timestamp': datetime.now().isoformat(),
+                    'export_time': datetime.now().isoformat(),
+                    'data': metric_data
+                }
+                existing_data['exports'].append(current_export)
+                
+                # Keep only last 24 hours of data to prevent file from growing too large
+                one_day_ago = datetime.now() - timedelta(days=1)
+                existing_data['exports'] = [
+                    export for export in existing_data['exports'] 
+                    if datetime.fromisoformat(export['timestamp'].replace('Z', '+00:00').replace('+00:00', '')) > one_day_ago
+                ]
+                
+                # Save updated data
+                with open(uncompressed_filepath, 'w') as f:
+                    json.dump(existing_data, f, indent=2)
+                
+                # Create compressed version
+                with gzip.open(compressed_filepath, 'wt') as f:
+                    json.dump(existing_data, f, indent=2)
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                
+                result = {
+                    'status': 'success',
+                    'message': f'Metrics appended successfully',
+                    'compressed_file': compressed_filename,
+                    'uncompressed_file': uncompressed_filename,
+                    'metrics_exported': len([m for m in metric_data['metrics'] if 'error' not in metric_data['metrics'][m]]),
+                    'errors': len([m for m in metric_data['metrics'] if 'error' in metric_data['metrics'][m]]),
+                    'time_range': f"{start_time} to {end_time} ({(end_time-start_time)/3600:.1f} hours)",
+                    'total_exports': len(existing_data['exports']),
+                    'download_urls': {
+                        'compressed': f"/{compressed_filename}",
+                        'uncompressed': f"/{uncompressed_filename}"
+                    }
+                }
+                self.wfile.write(json.dumps(result, indent=2).encode())
+                
+            except Exception as e:
+                self.send_error(500, f"Export failed: {str(e)}")
+        
+        def list_exports(self):
+            """List available metric export files"""
+            try:
+                exports = []
+                if os.path.exists(METRICS_DIR):
+                    for filename in os.listdir(METRICS_DIR):
+                        if filename.startswith('vllm_metrics_') and (filename.endswith('.json') or filename.endswith('.json.gz')):
+                            filepath = os.path.join(METRICS_DIR, filename)
+                            stat = os.stat(filepath)
+                            
+                            # Special handling for continuous files
+                            if filename.startswith('vllm_metrics_continuous'):
+                                try:
+                                    # Load the continuous file to get export count
+                                    with gzip.open(filepath, 'rt') if filepath.endswith('.gz') else open(filepath, 'r') as f:
+                                        data = json.load(f)
+                                    
+                                    export_count = len(data.get('exports', []))
+                                    last_export = data.get('exports', [])[-1] if data.get('exports') else None
+                                    last_timestamp = last_export.get('timestamp', 'Unknown') if last_export else 'Unknown'
+                                    
+                                    exports.append({
+                                        'filename': filename,
+                                        'size': stat.st_size,
+                                        'size_mb': round(stat.st_size / 1024 / 1024, 2),
+                                        'created': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                                        'last_updated': last_timestamp,
+                                        'export_count': export_count,
+                                        'type': f"continuous-{'compressed' if filename.endswith('.gz') else 'uncompressed'}",
+                                        'download_url': f"/{filename}"
+                                    })
+                                except:
+                                    # Fallback if file is corrupted
+                                    exports.append({
+                                        'filename': filename,
+                                        'size': stat.st_size,
+                                        'size_mb': round(stat.st_size / 1024 / 1024, 2),
+                                        'created': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                                        'type': f"continuous-{'compressed' if filename.endswith('.gz') else 'uncompressed'}",
+                                        'download_url': f"/{filename}",
+                                        'status': 'corrupted'
+                                    })
+                            else:
+                                # Legacy timestamped files
+                                exports.append({
+                                    'filename': filename,
+                                    'size': stat.st_size,
+                                    'size_mb': round(stat.st_size / 1024 / 1024, 2),
+                                    'created': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                                    'type': f"legacy-{'compressed' if filename.endswith('.gz') else 'uncompressed'}",
+                                    'download_url': f"/{filename}"
+                                })
+                
+                exports.sort(key=lambda x: x.get('last_updated', x['created']), reverse=True)
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                
+                result = {
+                    'status': 'success',
+                    'exports': exports,
+                    'count': len(exports),
+                    'total_size_mb': sum(e['size_mb'] for e in exports),
+                    'continuous_files': len([e for e in exports if e['type'].startswith('continuous')]),
+                    'legacy_files': len([e for e in exports if e['type'].startswith('legacy')])
+                }
+                self.wfile.write(json.dumps(result, indent=2).encode())
+                
+            except Exception as e:
+                self.send_error(500, f"List failed: {str(e)}")
+    
+    def run_server():
+        server = HTTPServer(('127.0.0.1', 8081), MetricExportHandler)
+        print("Metric export server starting on port 8081...")
+        server.serve_forever()
+    
+    def auto_export():
+        """Automatically export metrics every hour"""
+        # Wait 5 minutes before first export to let system stabilize
+        time.sleep(300)
+        
+        while True:
+            try:
+                print("🔄 Auto-exporting hourly metrics...")
+                # Use HTTP request instead of direct handler instantiation
+                response = requests.get('http://127.0.0.1:8081/export?hours=1', timeout=60)
+                if response.status_code == 200:
+                    print("✅ Auto-export completed")
+                else:
+                    print(f"❌ Auto-export failed: HTTP {response.status_code}")
+                time.sleep(3600)  # Wait 1 hour
+            except Exception as e:
+                print(f"❌ Auto-export error: {e}")
+                time.sleep(300)  # Wait 5 minutes before retry
+    
+    if __name__ == "__main__":
+        print("🚀 Starting vLLM Metric Exporter...")
+        
+        # Start auto-export in background
+        auto_thread = threading.Thread(target=auto_export, daemon=True)
+        auto_thread.start()
+        
+        # Start the web server
+        run_server()
 ---
-# Log Exporter Deployment
+# Metric Data Exporter Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -335,18 +735,53 @@ spec:
         ports:
         - containerPort: 8080
         volumeMounts:
-        - name: logs
-          mountPath: /logs
+        - name: metrics
+          mountPath: /metrics
         - name: nginx-config
           mountPath: /etc/nginx/nginx.conf
           subPath: nginx.conf
+        - name: web-config
+          mountPath: /web
+      - name: metric-exporter
+        image: python:3.9-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          pip install requests &&
+          python /scripts/metric_exporter.py
+        ports:
+        - containerPort: 8081
+        volumeMounts:
+        - name: metrics
+          mountPath: /metrics
+        - name: scripts
+          mountPath: /scripts
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
       volumes:
-      - name: logs
+      - name: metrics
         persistentVolumeClaim:
           claimName: prometheus-logs
       - name: nginx-config
         configMap:
           name: log-exporter-config
+          items:
+          - key: nginx.conf
+            path: nginx.conf
+      - name: scripts
+        configMap:
+          name: log-exporter-config
+          items:
+          - key: metric_exporter.py
+            path: metric_exporter.py
+            mode: 0755
+      - name: web-config
+        configMap:
+          name: log-exporter-config
+          items:
+          - key: dashboard.html
+            path: dashboard.html
 ---
 # Log Exporter Service
 apiVersion: v1

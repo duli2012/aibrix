@@ -81,8 +81,9 @@ spec:
     spec:
       containers:
       - name: benchmark
-        image: wangn19/runtime:benchmarking
-        # image: aibrix/runtime:nightly
+        image: duli2018/aibrix-benchmark:latest
+        imagePullPolicy: Always
+        workingDir: /benchmarks
         command:
         - bash
         - -c
@@ -107,19 +108,20 @@ spec:
               \"max_tokens\": 50
             }"
           # Run benchmark with specified host and port
-          aibrix_benchmark -m ${MODEL_NAME} -o ${MODEL_NAME} \
-            --input-start 4 \
-            --input-limit 4 \
-            --output-start 4 \
-            --output-limit 4 \
-            --rate-start 1 \
-            --rate-limit 1 \
-            --api-key "${API_KEY}" \
-            --port 8000 \
-            --host "${MODEL_NAME}.default.svc.cluster.local" \
-            --output /results/${MODEL_NAME}.jsonl
+          # aibrix_benchmark -m ${MODEL_NAME} -o ${MODEL_NAME} \
+          #   --input-start 4 \
+          #   --input-limit 4 \
+          #   --output-start 4 \
+          #   --output-limit 4 \
+          #   --rate-start 1 \
+          #   --rate-limit 1 \
+          #   --api-key "${API_KEY}" \
+          #   --port 8000 \
+          #   --host "${MODEL_NAME}.default.svc.cluster.local" \
+          #   --output /results/${MODEL_NAME}.jsonl
           # ./benchmark.sh all
-          
+          python benchmark.py --stage all --config config.yaml
+
           echo "Benchmark completed with exit code: $?"
           
         env:
@@ -149,9 +151,9 @@ DEPLOYMENT_POD=$(kubectl get pods -l app=${MODEL_NAME}-benchmark -o jsonpath='{.
 # Print the deployment pod name for debugging
 log "Deployment pod name: ${DEPLOYMENT_POD}"
 
-#TODO: Need a better way to check if the benchmark is complete)
+# Wait for benchmark to complete (simple fixed duration)
 log "Waiting for benchmark to complete..."
-sleep 180  
+sleep 300  # Wait 10 minutes for benchmark to complete
 
 # Copy results from the pod to local directory
 log "Copying results from pod..."
