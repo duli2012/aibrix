@@ -1,0 +1,86 @@
+# Build the manager binary
+FROM golang:1.22 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+# Copy the Go Modules manifests
+COPY go.mod go.mod
+COPY go.sum go.sum
+# cache deps before building and copying source so that we don't need to re-download as much
+# and so that source changes don't invalidate our downloaded layer
+RUN go mod download
+
+# Copy the go source
+COPY cmd/ cmd/
+COPY api/ api/
+COPY pkg/ pkg/
+
+# Build
+# the GOARCH has not a default value to allow the binary be built according to the host where the command
+# was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
+# the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
+# by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o benchmark cmd/controllers/main.go
+
+# Python environment for benchmarks
+FROM python:3.11-slim AS python-env
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory for benchmarks
+WORKDIR /benchmarks
+
+# Copy benchmarks folder
+COPY benchmarks/ .
+
+# Install Python dependencies based on actual imports found in the code
+RUN pip install --no-cache-dir \
+    pyyaml \
+    requests \
+    numpy \
+    pandas \
+    matplotlib \
+    transformers \
+    openai \
+    scipy \
+    aiohttp
+
+# Final stage combining both components
+FROM python:3.11-slim
+WORKDIR /
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the benchmark binary from builder stage
+COPY --from=builder /workspace/benchmark .
+
+# Copy the benchmarks environment
+COPY --from=python-env /benchmarks /benchmarks
+COPY --from=python-env /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=python-env /usr/local/bin /usr/local/bin
+
+# Create a non-root user first
+RUN useradd --create-home --shell /bin/bash aibrix
+
+# Fix ownership of benchmarks directory so aibrix user can write to it
+RUN chown -R aibrix:aibrix /benchmarks
+
+# Switch to non-root user
+USER aibrix
+
+# Set environment variables
+ENV PYTHONPATH=/benchmarks
+ENV PATH=/usr/local/bin:$PATH
+
+# Default to starting the benchmark binary, but allow running benchmarks
+ENTRYPOINT ["/benchmark"] 
